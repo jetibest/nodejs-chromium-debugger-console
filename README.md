@@ -23,3 +23,7 @@ The given target URL may end with an asterisk wildcard, exclusively to match any
 
 This will show an alert in the browser, with: "Remote Debugger says hello to: https://github.com/jetibest/nodejs-chromium-debugger-console/".
 Any javascript expressions are available, such as history.back(), to control the page navigation, etc.
+
+Every newline is sent to the page as a separate expression, which will always return at least one result.
+
+Type `.exit`, `exit`, `quit`, or `q` to exit the console.
