@@ -6,11 +6,11 @@ const WebSocket = require('ws');
 
 const debuggerUrl = 'http://127.0.0.1:9222';
 
-function get_debugger(path)
+function get_debugger()
 {
 	return new Promise(function(resolve, reject)
 	{
-		var req = http.request(debuggerUrl + path, function(res)
+		var req = http.request(debuggerUrl + '/json/version', function(res)
 		{
 			var data = '';
 			res.on('data', function(chunk)
@@ -27,30 +27,6 @@ function get_debugger(path)
 	});
 }
 
-var ws;
-var ws_id = 0;
-const ws_callbacks = {};
-function request_debugger(fn, args)
-{
-	var obj = {
-		resolve: function(){},
-		reject: function(){},
-		promise: null
-	};
-	ws_callbacks[++ws_id] = obj;
-	return obj.promise = new Promise(function(resolve, reject)
-	{
-		obj.resolve = resolve;
-		obj.reject = reject;
-		
-		ws.send(JSON.stringify({
-			id: ws_id,
-			method: fn,
-			params: args
-		}));
-	});
-}
-
 var targetUrl = process.argv.slice(2)[0] || '';
 var targetStartsWith = false;
 if(targetUrl.endsWith('*'))
@@ -62,54 +38,49 @@ if(targetUrl.endsWith('*'))
 (async () => {
 	
 	var wsUrl = '';
+    var targetId = '';
 	
-	var targets = await get_debugger('/json').catch(console.error);
-	if(targets && targets.length)
+	var dbg = await get_debugger().catch(console.error);
+	if(dbg)
 	{
-		for(var i=0;i<targets.length;++i)
-		{
-			var target = targets[i];
-			if(targetStartsWith)
-			{
-				if(target.url.startsWith(targetUrl))
-				{
-					wsUrl = target.webSocketDebuggerUrl;
-					break;
-				}
-			}
-			else if(target.url === targetUrl)
-			{
-				wsUrl = target.webSocketDebuggerUrl;
-				break;
-			}
-		}
+        if(dbg.webSocketDebuggerUrl)
+        {
+            wsUrl = dbg.webSocketDebuggerUrl;
+        }
+        else if(Array.isArray(dbg))
+        {
+            for(var i=0;i<dbg.length;++i)
+            {
+                var t = dbg[i];
+                
+                if(targetStartsWith)
+                {
+                    if(t.url.startsWith(targetUrl))
+                    {
+                        targetId = t.id;
+                        wsUrl = t.webSocketDebuggerUrl;
+                    }
+                }
+                else
+                {
+                    if(t.url === targetUrl)
+                    {
+                        targetId = t.id;
+                        wsUrl = t.webSocketDebuggerUrl;
+                    }
+                }
+            }
+        }
 	}
 	
 	if(!wsUrl)
 	{
 		console.error('First run chromium with: --remote-debugging-port=9222');
 		console.error('Usage: ' + process.argv[0] + ' ' + process.argv[1] + ' <target-url>');
-		return console.log('error: Target not found.');
+		return console.log(JSON.stringify({error: 'Target not found.'}));
 	}
 	
-
-	ws = new WebSocket(wsUrl, {perMessageDeflate: false});
-	ws.on('message', function(msg)
-	{
-		var result = JSON.parse(msg.toString('utf8'));
-		if('error' in result)
-		{
-			ws_callbacks[result.id].reject(result);
-		}
-		else
-		{
-			ws_callbacks[result.id].resolve(result);
-		}
-		delete ws_callbacks[result.id];
-	});
-	await new Promise(function(resolve){ ws.on('open', resolve); });
-	
-	readline.createInterface({
+	var stdio = readline.createInterface({
 		input: process.stdin,
 		output: process.stdout,
 		terminal: false
@@ -118,23 +89,42 @@ if(targetUrl.endsWith('*'))
 		if(ln === '.exit' || ln === 'exit' || ln === 'q' || ln === 'quit')
 		{
 			this.close();
-			ws.close();
 			return;
 		}
 		
-		var result = await request_debugger('Runtime.evaluate', {
-			expression: ln,
-			includeCommandLineAPI: true,
-			silent: true,
-			generatePreview: false,
-			userGesture: false,
-			awaitPromise: false,
-			throwOnSideEffect: false
-		}).catch(err => console.error(err.error));
-		console.log(result.result);
+		console.error('Sending: ' + ln);
 		
-	}).on('close', function()
-	{
-		ws.close();
-	});
+		if(isOpen)
+        {
+            ws.send(ln);
+        }
+        else
+        {
+            openLines.push(ln);
+        }
+    });
+	
+    var isOpen = false;
+    var openLines = [];
+    var ws = new WebSocket(wsUrl);
+    ws.onopen = async function()
+    {
+        console.error('WebSocket opened');
+        isOpen = true;
+        for(var i=0;i<openLines.length;++i)
+        {
+            var ln = openLines[i];
+            
+            ws.send(ln);
+        }
+    };
+    ws.onmessage = function(e)
+    {
+        console.log(e.data +'');
+    };
+    ws.onclose = function()
+    {
+        console.error('WebSocket closed');
+        stdio.close();
+    };
 })();
